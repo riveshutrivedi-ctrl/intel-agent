@@ -64,7 +64,7 @@ def fetch_arctic_shift(subreddit):
 
     posts_url = (
         f"https://arctic-shift.photon-reddit.com/api/posts/search"
-        f"?subreddit={subreddit}&after={week_ago}&before={now}&limit=50&sort=score"
+        f"?subreddit={subreddit}&after={week_ago}&before={now}&limit=100"
     )
     r = requests.get(posts_url, timeout=30)
     r.raise_for_status()
@@ -72,7 +72,7 @@ def fetch_arctic_shift(subreddit):
 
     comments_url = (
         f"https://arctic-shift.photon-reddit.com/api/comments/search"
-        f"?subreddit={subreddit}&after={week_ago}&before={now}&limit=200&sort=score"
+        f"?subreddit={subreddit}&after={week_ago}&before={now}&limit=500"
     )
     cr = requests.get(comments_url, timeout=30)
     comments_by_post = {}
@@ -98,20 +98,20 @@ def fetch_arctic_shift(subreddit):
 
 def fetch_subreddit(subreddit):
     try:
-        posts = fetch_reddit_json(subreddit)
-        if posts:
-            print(f"r/{subreddit}: {len(posts)} posts via Reddit .json")
-            return posts
-    except Exception as e:
-        print(f"Reddit .json failed for r/{subreddit}: {e}, trying Arctic Shift...")
-
-    try:
         posts = fetch_arctic_shift(subreddit)
         if posts:
             print(f"r/{subreddit}: {len(posts)} posts via Arctic Shift")
             return posts
     except Exception as e:
-        print(f"Arctic Shift failed for r/{subreddit}: {e}")
+        print(f"Arctic Shift failed for r/{subreddit}: {e}, trying Reddit .json...")
+
+    try:
+        posts = fetch_reddit_json(subreddit)
+        if posts:
+            print(f"r/{subreddit}: {len(posts)} posts via Reddit .json")
+            return posts
+    except Exception as e:
+        print(f"Reddit .json failed for r/{subreddit}: {e}")
 
     return []
 
