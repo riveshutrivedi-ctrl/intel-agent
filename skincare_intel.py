@@ -1,11 +1,22 @@
 import os
+import re
 import json
 import time
 import requests
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from openai import OpenAI
 
-SUBREDDITS = ["IndianSkincareAddicts", "SkincareAddiction", "AsianBeauty"]
+SUBREDDITS = [
+    "IndianSkincareAddicts",
+    "SkincareAddiction",
+    "AsianBeauty",
+    "tretinoin",
+    "IndianMakeupAndBeauty",
+    "acne",
+    "hyperpigmentation",
+    "30PlusSkinCare",
+]
 SLACK_WEBHOOK = os.environ["SLACK_WEBHOOK_URL"]
 GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
 USER_AGENT = "script:FoxtaleResearchBot:v1.0 (by /u/foxtale_research)"
@@ -50,7 +61,6 @@ def fetch_reddit_json(subreddit):
             "num_comments": d["num_comments"],
             "comments": [],
         }
-        # Fetch comments for posts with meaningful engagement
         if d["score"] >= 30 or d["num_comments"] >= 10:
             post["comments"] = fetch_comments_reddit(subreddit, d["id"], headers)
             time.sleep(0.5)
@@ -72,12 +82,14 @@ def fetch_arctic_shift(subreddit):
 
     comments_url = (
         f"https://arctic-shift.photon-reddit.com/api/comments/search"
-        f"?subreddit={subreddit}&after={week_ago}&before={now}&limit=500"
+        f"?subreddit={subreddit}&after={week_ago}&before={now}&limit=1000"
     )
     cr = requests.get(comments_url, timeout=30)
     comments_by_post = {}
     if cr.status_code == 200:
         for c in cr.json().get("data", []):
+            if c.get("body") in ("[removed]", "[deleted]", "", None):
+                continue
             pid = c.get("link_id", "").replace("t3_", "")
             comments_by_post.setdefault(pid, []).append(c.get("body", "")[:300])
 
@@ -116,17 +128,37 @@ def fetch_subreddit(subreddit):
     return []
 
 
+def find_new_subreddits(all_posts):
+    """Extract r/ mentions from posts and comments not already in our list."""
+    known = {s.lower() for s in SUBREDDITS}
+    mentions = []
+    pattern = re.compile(r"r/([A-Za-z0-9_]+)", re.IGNORECASE)
+
+    for p in all_posts:
+        text = f"{p['title']} {p['body']} {' '.join(p['comments'])}"
+        for match in pattern.findall(text):
+            if match.lower() not in known:
+                mentions.append(match.lower())
+
+    counts = Counter(mentions)
+    # Return subreddits mentioned 3+ times, sorted by frequency
+    return [(sub, count) for sub, count in counts.most_common(5) if count >= 3]
+
+
 def analyze(all_posts):
     client = OpenAI(
         base_url="https://models.inference.ai.azure.com",
         api_key=GITHUB_TOKEN,
     )
 
+    # Sort by score, take top 150 across all subreddits
+    sorted_posts = sorted(all_posts, key=lambda x: x["score"], reverse=True)[:150]
+
     posts_text = "\n\n".join(
         f"[r/{p['subreddit']}] {p['title']} (score: {p['score']})\n"
         f"Post: {p['body']}\n"
         f"Top comments: {' | '.join(p['comments'][:5]) if p['comments'] else 'none'}"
-        for p in all_posts[:120]
+        for p in sorted_posts
     )
 
     prompt = f"""You are a consumer insights analyst for Foxtale, an Indian D2C skincare brand.
@@ -169,9 +201,10 @@ Include 3-5 problems ranked by frequency. 2-3 unmet_needs. foxtale_mentions only
     return json.loads(response.choices[0].message.content)
 
 
-def format_message(analysis):
+def format_message(analysis, new_subreddits, total_posts):
     today = datetime.utcnow().strftime("%d %b %Y")
-    lines = [f"\U0001f50d *Skincare Reddit Digest \u2014 Week of {today}*\n"]
+    sources = " \u00b7 ".join(f"r/{s}" for s in SUBREDDITS)
+    lines = [f"\U0001f50d *Skincare Reddit Digest \u2014 Week of {today}* ({total_posts} posts analysed)\n"]
 
     lines.append("*TOP CONSUMER PROBLEMS*")
     for i, p in enumerate(analysis["problems"], 1):
@@ -186,7 +219,12 @@ def format_message(analysis):
         for m in analysis["foxtale_mentions"]:
             lines.append(f"\u2022 _{m['title']}_ \u2014 {m['sentiment']}")
 
-    lines.append("\n_Sources: r/IndianSkincareAddicts \u00b7 r/SkincareAddiction \u00b7 r/AsianBeauty_")
+    if new_subreddits:
+        lines.append("\n*NEW SUBREDDITS TO WATCH*")
+        for sub, count in new_subreddits:
+            lines.append(f"\u2022 r/{sub} \u2014 mentioned {count}x this week")
+
+    lines.append(f"\n_Sources: {sources}_")
     return "\n".join(lines)
 
 
@@ -212,7 +250,8 @@ def main():
 
     print(f"Analyzing {len(all_posts)} posts...")
     analysis = analyze(all_posts)
-    message = format_message(analysis)
+    new_subreddits = find_new_subreddits(all_posts)
+    message = format_message(analysis, new_subreddits, len(all_posts))
     send_to_slack(message)
     print("Digest sent to Slack.")
 
