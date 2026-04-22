@@ -17,8 +17,31 @@ SUBREDDITS = [
     "hyperpigmentation",
     "30PlusSkinCare",
 ]
+YOUTUBE_KEYWORDS = [
+    "acne oily skin India",
+    "hyperpigmentation dark spots Indian skin",
+    "sunscreen India oily skin summer",
+    "closed comedones India skincare",
+    "hormonal acne India treatment",
+    "skin barrier repair India",
+    "tan removal Indian skin",
+    "large pores Indian skin",
+    "niacinamide serum India review",
+    "retinol India beginners",
+    "vitamin c serum India review",
+    "affordable sunscreen India",
+    "best moisturizer oily skin India",
+    "skincare Indian skin type",
+    "monsoon skincare India",
+    "summer skincare routine India",
+    "dark circles Indian skin",
+    "uneven skin tone India",
+    "skincare products India honest review",
+    "dermatologist India skincare recommendation",
+]
 SLACK_WEBHOOK = os.environ["SLACK_WEBHOOK_URL"]
 GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
+YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
 USER_AGENT = "script:FoxtaleResearchBot:v1.0 (by /u/foxtale_research)"
 
 
@@ -128,6 +151,80 @@ def fetch_subreddit(subreddit):
     return []
 
 
+def fetch_youtube(api_key):
+    week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    seen_ids = set()
+    results = []
+
+    for keyword in YOUTUBE_KEYWORDS:
+        try:
+            search_r = requests.get(
+                "https://www.googleapis.com/youtube/v3/search",
+                params={
+                    "key": api_key,
+                    "q": keyword,
+                    "type": "video",
+                    "part": "snippet",
+                    "regionCode": "IN",
+                    "relevanceLanguage": "en",
+                    "publishedAfter": week_ago,
+                    "maxResults": 5,
+                    "order": "relevance",
+                    "videoDuration": "medium",
+                },
+                timeout=20,
+            )
+            if search_r.status_code != 200:
+                continue
+            videos = search_r.json().get("items", [])
+        except Exception as e:
+            print(f"YouTube search failed for '{keyword}': {e}")
+            continue
+
+        for item in videos:
+            vid_id = item["id"].get("videoId")
+            if not vid_id or vid_id in seen_ids:
+                continue
+            seen_ids.add(vid_id)
+
+            title = item["snippet"]["title"]
+            try:
+                comments_r = requests.get(
+                    "https://www.googleapis.com/youtube/v3/commentThreads",
+                    params={
+                        "key": api_key,
+                        "videoId": vid_id,
+                        "part": "snippet",
+                        "maxResults": 30,
+                        "order": "relevance",
+                        "textFormat": "plainText",
+                    },
+                    timeout=20,
+                )
+                comments = []
+                if comments_r.status_code == 200:
+                    for c in comments_r.json().get("items", []):
+                        text = c["snippet"]["topLevelComment"]["snippet"]["textDisplay"][:300]
+                        if len(text) >= 30:
+                            comments.append(text)
+            except Exception:
+                comments = []
+
+            if comments:
+                results.append({
+                    "source": "youtube",
+                    "id": vid_id,
+                    "title": title,
+                    "body": "",
+                    "score": 0,
+                    "subreddit": "",
+                    "comments": comments,
+                })
+
+    print(f"YouTube: {len(results)} unique videos with comments")
+    return results
+
+
 def find_new_subreddits(all_posts):
     """Extract r/ mentions from posts and comments not already in our list."""
     known = {s.lower() for s in SUBREDDITS}
@@ -151,22 +248,44 @@ def analyze(all_posts):
         api_key=GITHUB_TOKEN,
     )
 
-    # Sort by score, take top 150 across all subreddits
-    sorted_posts = sorted(all_posts, key=lambda x: x["score"], reverse=True)[:150]
+    # Top 100 Reddit posts by score + all YouTube items (YouTube score=0 so keep separate)
+    reddit_posts = sorted(
+        [p for p in all_posts if p.get("source", "reddit") == "reddit"],
+        key=lambda x: x["score"], reverse=True
+    )[:100]
+    youtube_items = [p for p in all_posts if p.get("source") == "youtube"]
+    sorted_posts = reddit_posts + youtube_items
 
-    posts_text = "\n\n".join(
-        f"[r/{p['subreddit']}] {p['title']} (score: {p['score']})\n"
-        f"Post: {p['body']}\n"
-        f"Top comments: {' | '.join(p['comments'][:5]) if p['comments'] else 'none'}"
-        for p in sorted_posts
-    )
+    def format_item(p):
+        source = p.get("source", "reddit")
+        if source == "youtube":
+            return (
+                f"[YouTube: {p['title']}]\n"
+                f"Comments: {' | '.join(p['comments'][:5]) if p['comments'] else 'none'}"
+            )
+        return (
+            f"[Reddit: r/{p['subreddit']}] {p['title']} (score: {p['score']})\n"
+            f"Post: {p['body']}\n"
+            f"Top comments: {' | '.join(p['comments'][:5]) if p['comments'] else 'none'}"
+        )
+
+    posts_text = "\n\n".join(format_item(p) for p in sorted_posts)
 
     prompt = f"""You are a consumer insights analyst for Foxtale, an Indian D2C skincare brand.
 
-Analyze these Reddit posts AND comments from skincare communities (past week). Your goal is PROBLEM MINING — find underlying consumer problems, not surface complaints. Comments often reveal more honest frustration than post titles.
+Analyze this multi-source data from skincare communities (past week). Sources are labeled:
+- [Reddit: r/subreddit] — community discussion posts with upvotes; scores reflect community agreement
+- [YouTube: video title] — comments on skincare videos; reflect reactions, questions, and frustrations of viewers
+
+Your goal is PROBLEM MINING — find underlying consumer problems, not surface complaints.
+
+Source weighting rules:
+- A problem appearing in BOTH Reddit and YouTube is a stronger signal than one source alone — call this out explicitly
+- Reddit scores indicate community resonance; high-score posts signal widespread agreement
+- YouTube comments with many likes or replies signal emotionally resonant frustrations
 
 Look for:
-- Repeated questions across posts/comments → unmet information or education need
+- Repeated questions across sources → unmet information or education need
 - Workarounds people describe → product or category gap
 - "I've tried everything" / chronic frustration → unresolved persistent problem
 - Frustration with ingredient combos → formulation complexity pain
@@ -174,23 +293,28 @@ Look for:
 - Affordability + efficacy tension → price-performance gap
 - Ingredient confusion or misinformation circulating → education opportunity
 
-Also check for any mention of "foxtale" or "fox tale" (case insensitive) in posts or comments.
+Also check for any mention of "foxtale" or "fox tale" (case insensitive) across all sources.
 
-POSTS + COMMENTS:
+DATA:
 {posts_text}
 
 Respond ONLY with valid JSON in this exact format:
 {{
   "problems": [
-    {{"theme": "Theme name", "summary": "2-sentence explanation of the pattern and why it signals an opportunity", "post_count": 5}}
+    {{
+      "theme": "Theme name",
+      "summary": "2-sentence explanation of the pattern and why it signals an opportunity",
+      "post_count": 5,
+      "sources": ["reddit", "youtube"]
+    }}
   ],
   "unmet_needs": ["specific unmet need 1", "specific unmet need 2"],
   "foxtale_mentions": [
-    {{"title": "post title", "sentiment": "positive/negative/neutral"}}
+    {{"title": "post or video title", "sentiment": "positive/negative/neutral", "source": "reddit/youtube"}}
   ]
 }}
 
-Include 3-5 problems ranked by frequency. 2-3 unmet_needs. foxtale_mentions only if found (empty array if none)."""
+Include 3-5 problems ranked by frequency. Prioritise problems appearing in multiple sources. 2-3 unmet_needs. foxtale_mentions only if found (empty array if none)."""
 
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -203,12 +327,17 @@ Include 3-5 problems ranked by frequency. 2-3 unmet_needs. foxtale_mentions only
 
 def format_message(analysis, new_subreddits, total_posts):
     today = datetime.utcnow().strftime("%d %b %Y")
-    sources = " \u00b7 ".join(f"r/{s}" for s in SUBREDDITS)
-    lines = [f"\U0001f50d *Skincare Reddit Digest \u2014 Week of {today}* ({total_posts} posts analysed)\n"]
+    lines = [f"\U0001f50d *Skincare Intel Digest \u2014 Week of {today}* ({total_posts} signals analysed)\n"]
 
     lines.append("*TOP CONSUMER PROBLEMS*")
     for i, p in enumerate(analysis["problems"], 1):
-        lines.append(f"{i}. *{p['theme']}* \u2014 {p['summary']} ({p['post_count']} posts)")
+        srcs = p.get("sources", [])
+        source_tag = ""
+        if "reddit" in srcs and "youtube" in srcs:
+            source_tag = " \u26a1 _cross-source_"
+        elif "youtube" in srcs:
+            source_tag = " _[YT]_"
+        lines.append(f"{i}. *{p['theme']}*{source_tag} \u2014 {p['summary']} ({p['post_count']} signals)")
 
     lines.append("\n*UNMET NEEDS*")
     for need in analysis["unmet_needs"]:
@@ -217,14 +346,16 @@ def format_message(analysis, new_subreddits, total_posts):
     if analysis.get("foxtale_mentions"):
         lines.append("\n*FOXTALE MENTIONS*")
         for m in analysis["foxtale_mentions"]:
-            lines.append(f"\u2022 _{m['title']}_ \u2014 {m['sentiment']}")
+            src = f" [{m.get('source', 'reddit').upper()}]" if m.get("source") else ""
+            lines.append(f"\u2022 _{m['title']}_{src} \u2014 {m['sentiment']}")
 
     if new_subreddits:
         lines.append("\n*NEW SUBREDDITS TO WATCH*")
         for sub, count in new_subreddits:
             lines.append(f"\u2022 r/{sub} \u2014 mentioned {count}x this week")
 
-    lines.append(f"\n_Sources: {sources}_")
+    reddit_sources = " \u00b7 ".join(f"r/{s}" for s in SUBREDDITS)
+    lines.append(f"\n_Sources: {reddit_sources} \u00b7 YouTube_")
     return "\n".join(lines)
 
 
@@ -248,7 +379,13 @@ def main():
         send_to_slack("\u26a0\ufe0f *Skincare Intel*: Failed to fetch Reddit data this week.")
         return
 
-    print(f"Analyzing {len(all_posts)} posts...")
+    if YOUTUBE_API_KEY:
+        youtube_items = fetch_youtube(YOUTUBE_API_KEY)
+        all_posts.extend(youtube_items)
+    else:
+        print("YOUTUBE_API_KEY not set — skipping YouTube.")
+
+    print(f"Analyzing {len(all_posts)} total signals...")
     analysis = analyze(all_posts)
     new_subreddits = find_new_subreddits(all_posts)
     message = format_message(analysis, new_subreddits, len(all_posts))
