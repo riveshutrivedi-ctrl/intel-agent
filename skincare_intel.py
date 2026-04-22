@@ -248,28 +248,31 @@ def analyze(all_posts):
         api_key=GITHUB_TOKEN,
     )
 
-    # Top 100 Reddit posts by score + all YouTube items (YouTube score=0 so keep separate)
+    # Trim to fit GitHub Models 8k token limit:
+    # top 30 Reddit by score + top 20 YouTube by comment count
     reddit_posts = sorted(
         [p for p in all_posts if p.get("source", "reddit") == "reddit"],
         key=lambda x: x["score"], reverse=True
-    )[:100]
-    youtube_items = [p for p in all_posts if p.get("source") == "youtube"]
-    sorted_posts = reddit_posts + youtube_items
+    )[:30]
+    youtube_items = sorted(
+        [p for p in all_posts if p.get("source") == "youtube"],
+        key=lambda x: len(x["comments"]), reverse=True
+    )[:20]
+    selected = reddit_posts + youtube_items
 
     def format_item(p):
         source = p.get("source", "reddit")
         if source == "youtube":
-            return (
-                f"[YouTube: {p['title']}]\n"
-                f"Comments: {' | '.join(p['comments'][:5]) if p['comments'] else 'none'}"
-            )
+            comments = " | ".join(c[:150] for c in p["comments"][:3]) or "none"
+            return f"[YouTube: {p['title']}]\nComments: {comments}"
+        body = p["body"][:200]
+        comments = " | ".join(c[:150] for c in p["comments"][:3]) or "none"
         return (
             f"[Reddit: r/{p['subreddit']}] {p['title']} (score: {p['score']})\n"
-            f"Post: {p['body']}\n"
-            f"Top comments: {' | '.join(p['comments'][:5]) if p['comments'] else 'none'}"
+            f"Post: {body}\nTop comments: {comments}"
         )
 
-    posts_text = "\n\n".join(format_item(p) for p in sorted_posts)
+    posts_text = "\n\n".join(format_item(p) for p in selected)
 
     prompt = f"""You are a consumer insights analyst for Foxtale, an Indian D2C skincare brand.
 
