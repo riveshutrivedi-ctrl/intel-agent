@@ -1,32 +1,27 @@
-name: Weekly Skincare Intelligence Brief
+name: Skincare Intel Digest
 
 on:
   schedule:
-    # 10:00 AM IST = 04:30 AM UTC. Runs every Monday.
-    - cron: '30 4 * * 1'
-  workflow_dispatch:
-    # Allows you to trigger this manually from the GitHub UI (for testing)
+    - cron: '30 3 * * 1'  # Monday 9:00am IST
+  workflow_dispatch:      # Allows manual test runs from GitHub UI
 
 jobs:
-  skincare-intel:
+  digest:
     runs-on: ubuntu-latest
-
+    permissions:
+      models: read
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: |
-          pip install -r agents/skincare-intel/requirements.txt
+        run: pip install requests openai
 
-      - name: Run Skincare Intelligence Agent
+      - name: Run digest
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        run: |
-          python agents/skincare-intel/main.py
+        run: python skincare_intel.py
