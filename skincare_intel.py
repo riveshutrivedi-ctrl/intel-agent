@@ -41,6 +41,7 @@ YOUTUBE_KEYWORDS = [
 ]
 SLACK_WEBHOOK = os.environ["SLACK_WEBHOOK_URL"]
 GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
+GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
 USER_AGENT = "script:FoxtaleResearchBot:v1.0 (by /u/foxtale_research)"
 
@@ -244,32 +245,27 @@ def find_new_subreddits(all_posts):
 
 def analyze(all_posts):
     client = OpenAI(
-        base_url="https://models.inference.ai.azure.com",
-        api_key=GITHUB_TOKEN,
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        api_key=GEMINI_API_KEY,
     )
 
-    # Trim to fit GitHub Models 8k token limit:
-    # top 30 Reddit by score + top 20 YouTube by comment count
+    # Top 150 Reddit by score + all YouTube items
     reddit_posts = sorted(
         [p for p in all_posts if p.get("source", "reddit") == "reddit"],
         key=lambda x: x["score"], reverse=True
-    )[:30]
-    youtube_items = sorted(
-        [p for p in all_posts if p.get("source") == "youtube"],
-        key=lambda x: len(x["comments"]), reverse=True
-    )[:20]
+    )[:150]
+    youtube_items = [p for p in all_posts if p.get("source") == "youtube"]
     selected = reddit_posts + youtube_items
 
     def format_item(p):
         source = p.get("source", "reddit")
         if source == "youtube":
-            comments = " | ".join(c[:150] for c in p["comments"][:3]) or "none"
+            comments = " | ".join(p["comments"][:5]) or "none"
             return f"[YouTube: {p['title']}]\nComments: {comments}"
-        body = p["body"][:200]
-        comments = " | ".join(c[:150] for c in p["comments"][:3]) or "none"
+        comments = " | ".join(p["comments"][:5]) or "none"
         return (
             f"[Reddit: r/{p['subreddit']}] {p['title']} (score: {p['score']})\n"
-            f"Post: {body}\nTop comments: {comments}"
+            f"Post: {p['body']}\nTop comments: {comments}"
         )
 
     posts_text = "\n\n".join(format_item(p) for p in selected)
@@ -320,7 +316,7 @@ Respond ONLY with valid JSON in this exact format:
 Include 3-5 problems ranked by frequency. Prioritise problems appearing in multiple sources. 2-3 unmet_needs. foxtale_mentions only if found (empty array if none)."""
 
     response = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gemini-2.0-flash",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.3,
         max_tokens=1500,
