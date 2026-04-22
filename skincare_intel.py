@@ -8,11 +8,26 @@ from openai import OpenAI
 SUBREDDITS = ["IndianSkincareAddicts", "SkincareAddiction", "AsianBeauty"]
 SLACK_WEBHOOK = os.environ["SLACK_WEBHOOK_URL"]
 GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
+REDDIT_CLIENT_ID = os.environ["REDDIT_CLIENT_ID"]
+REDDIT_CLIENT_SECRET = os.environ["REDDIT_CLIENT_SECRET"]
+USER_AGENT = "FoxtaleResearchBot/1.0 by /u/foxtale_research"
 
 
-def fetch_subreddit(subreddit):
-    url = f"https://www.reddit.com/r/{subreddit}/top.json?t=week&limit=100&raw_json=1"
-    headers = {"User-Agent": "FoxtaleResearchBot/1.0"}
+def get_reddit_token():
+    r = requests.post(
+        "https://www.reddit.com/api/v1/access_token",
+        auth=requests.auth.HTTPBasicAuth(REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET),
+        data={"grant_type": "client_credentials"},
+        headers={"User-Agent": USER_AGENT},
+        timeout=15,
+    )
+    r.raise_for_status()
+    return r.json()["access_token"]
+
+
+def fetch_subreddit(subreddit, token):
+    url = f"https://oauth.reddit.com/r/{subreddit}/top?t=week&limit=100&raw_json=1"
+    headers = {"Authorization": f"bearer {token}", "User-Agent": USER_AGENT}
     try:
         r = requests.get(url, headers=headers, timeout=30)
         if r.status_code == 429:
@@ -117,9 +132,10 @@ def send_to_slack(message):
 
 
 def main():
+    token = get_reddit_token()
     all_posts = []
     for sub in SUBREDDITS:
-        posts = fetch_subreddit(sub)
+        posts = fetch_subreddit(sub, token)
         all_posts.extend(posts)
         print(f"Fetched {len(posts)} posts from r/{sub}")
 
