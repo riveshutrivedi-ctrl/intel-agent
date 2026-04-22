@@ -2,52 +2,118 @@ import os
 import json
 import time
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from openai import OpenAI
 
 SUBREDDITS = ["IndianSkincareAddicts", "SkincareAddiction", "AsianBeauty"]
 SLACK_WEBHOOK = os.environ["SLACK_WEBHOOK_URL"]
 GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
-REDDIT_CLIENT_ID = os.environ["REDDIT_CLIENT_ID"]
-REDDIT_CLIENT_SECRET = os.environ["REDDIT_CLIENT_SECRET"]
-USER_AGENT = "FoxtaleResearchBot/1.0 by /u/foxtale_research"
+USER_AGENT = "script:FoxtaleResearchBot:v1.0 (by /u/foxtale_research)"
 
 
-def get_reddit_token():
-    r = requests.post(
-        "https://www.reddit.com/api/v1/access_token",
-        auth=requests.auth.HTTPBasicAuth(REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET),
-        data={"grant_type": "client_credentials"},
-        headers={"User-Agent": USER_AGENT},
-        timeout=15,
-    )
-    r.raise_for_status()
-    return r.json()["access_token"]
-
-
-def fetch_subreddit(subreddit, token):
-    url = f"https://oauth.reddit.com/r/{subreddit}/top?t=week&limit=100&raw_json=1"
-    headers = {"Authorization": f"bearer {token}", "User-Agent": USER_AGENT}
+def fetch_comments_reddit(subreddit, post_id, headers):
+    url = f"https://www.reddit.com/r/{subreddit}/comments/{post_id}.json?limit=20&depth=2&raw_json=1"
     try:
-        r = requests.get(url, headers=headers, timeout=30)
-        if r.status_code == 429:
-            time.sleep(10)
-            r = requests.get(url, headers=headers, timeout=30)
-        r.raise_for_status()
-        posts = r.json()["data"]["children"]
-        return [
-            {
-                "subreddit": subreddit,
-                "title": p["data"]["title"],
-                "body": p["data"].get("selftext", "")[:500],
-                "score": p["data"]["score"],
-            }
-            for p in posts
-            if p["data"]["score"] > 10
-        ]
-    except Exception as e:
-        print(f"Error fetching r/{subreddit}: {e}")
+        r = requests.get(url, headers=headers, timeout=20)
+        if r.status_code != 200:
+            return []
+        comment_listing = r.json()
+        if len(comment_listing) < 2:
+            return []
+        comments = []
+        for c in comment_listing[1]["data"]["children"][:10]:
+            if c["kind"] == "t1" and c["data"].get("body"):
+                comments.append(c["data"]["body"][:300])
+        return comments
+    except Exception:
         return []
+
+
+def fetch_reddit_json(subreddit):
+    headers = {"User-Agent": USER_AGENT}
+    url = f"https://www.reddit.com/r/{subreddit}/top.json?t=week&limit=50&raw_json=1"
+    r = requests.get(url, headers=headers, timeout=30)
+    r.raise_for_status()
+
+    posts = r.json()["data"]["children"]
+    result = []
+    for p in posts[:25]:
+        d = p["data"]
+        if d["score"] < 5:
+            continue
+        post = {
+            "subreddit": subreddit,
+            "id": d["id"],
+            "title": d["title"],
+            "body": d.get("selftext", "")[:600],
+            "score": d["score"],
+            "num_comments": d["num_comments"],
+            "comments": [],
+        }
+        # Fetch comments for posts with meaningful engagement
+        if d["score"] >= 30 or d["num_comments"] >= 10:
+            post["comments"] = fetch_comments_reddit(subreddit, d["id"], headers)
+            time.sleep(0.5)
+        result.append(post)
+    return result
+
+
+def fetch_arctic_shift(subreddit):
+    week_ago = int((datetime.now(timezone.utc) - timedelta(days=7)).timestamp())
+    now = int(datetime.now(timezone.utc).timestamp())
+
+    posts_url = (
+        f"https://arctic-shift.photon-reddit.com/api/posts/search"
+        f"?subreddit={subreddit}&after={week_ago}&before={now}&limit=50&sort=score"
+    )
+    r = requests.get(posts_url, timeout=30)
+    r.raise_for_status()
+    posts_data = r.json().get("data", [])
+
+    comments_url = (
+        f"https://arctic-shift.photon-reddit.com/api/comments/search"
+        f"?subreddit={subreddit}&after={week_ago}&before={now}&limit=200&sort=score"
+    )
+    cr = requests.get(comments_url, timeout=30)
+    comments_by_post = {}
+    if cr.status_code == 200:
+        for c in cr.json().get("data", []):
+            pid = c.get("link_id", "").replace("t3_", "")
+            comments_by_post.setdefault(pid, []).append(c.get("body", "")[:300])
+
+    result = []
+    for p in posts_data:
+        pid = p.get("id", "")
+        result.append({
+            "subreddit": subreddit,
+            "id": pid,
+            "title": p.get("title", ""),
+            "body": p.get("selftext", "")[:600],
+            "score": p.get("score", 0),
+            "num_comments": p.get("num_comments", 0),
+            "comments": comments_by_post.get(pid, [])[:10],
+        })
+    return result
+
+
+def fetch_subreddit(subreddit):
+    try:
+        posts = fetch_reddit_json(subreddit)
+        if posts:
+            print(f"r/{subreddit}: {len(posts)} posts via Reddit .json")
+            return posts
+    except Exception as e:
+        print(f"Reddit .json failed for r/{subreddit}: {e}, trying Arctic Shift...")
+
+    try:
+        posts = fetch_arctic_shift(subreddit)
+        if posts:
+            print(f"r/{subreddit}: {len(posts)} posts via Arctic Shift")
+            return posts
+    except Exception as e:
+        print(f"Arctic Shift failed for r/{subreddit}: {e}")
+
+    return []
 
 
 def analyze(all_posts):
@@ -57,31 +123,34 @@ def analyze(all_posts):
     )
 
     posts_text = "\n\n".join(
-        f"[r/{p['subreddit']}] {p['title']}\n{p['body']}"
-        for p in all_posts[:150]
+        f"[r/{p['subreddit']}] {p['title']} (score: {p['score']})\n"
+        f"Post: {p['body']}\n"
+        f"Top comments: {' | '.join(p['comments'][:5]) if p['comments'] else 'none'}"
+        for p in all_posts[:120]
     )
 
     prompt = f"""You are a consumer insights analyst for Foxtale, an Indian D2C skincare brand.
 
-Analyze these Reddit posts from skincare communities (past week). Your goal is PROBLEM MINING — find underlying consumer problems, not surface complaints.
+Analyze these Reddit posts AND comments from skincare communities (past week). Your goal is PROBLEM MINING — find underlying consumer problems, not surface complaints. Comments often reveal more honest frustration than post titles.
 
 Look for:
-- Repeated questions → unmet information or education need
+- Repeated questions across posts/comments → unmet information or education need
 - Workarounds people describe → product or category gap
-- "I've tried everything" posts → chronic unresolved problem
+- "I've tried everything" / chronic frustration → unresolved persistent problem
 - Frustration with ingredient combos → formulation complexity pain
-- Indian-specific concerns (humidity, pigmentation, oiliness, tan) → climate or skin-type gap
+- Indian-specific concerns (humidity, pigmentation, oiliness, tan, monsoon skin) → climate/skin-type gap
 - Affordability + efficacy tension → price-performance gap
+- Ingredient confusion or misinformation circulating → education opportunity
 
-Also check for any mention of "foxtale" or "fox tale" (case insensitive).
+Also check for any mention of "foxtale" or "fox tale" (case insensitive) in posts or comments.
 
-POSTS:
+POSTS + COMMENTS:
 {posts_text}
 
 Respond ONLY with valid JSON in this exact format:
 {{
   "problems": [
-    {{"theme": "Theme name", "summary": "2-sentence explanation of pattern and why it signals an opportunity", "post_count": 5}}
+    {{"theme": "Theme name", "summary": "2-sentence explanation of the pattern and why it signals an opportunity", "post_count": 5}}
   ],
   "unmet_needs": ["specific unmet need 1", "specific unmet need 2"],
   "foxtale_mentions": [
@@ -89,7 +158,7 @@ Respond ONLY with valid JSON in this exact format:
   ]
 }}
 
-Include 3-5 problems, 2-3 unmet_needs. foxtale_mentions should be empty array if none found."""
+Include 3-5 problems ranked by frequency. 2-3 unmet_needs. foxtale_mentions only if found (empty array if none)."""
 
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -132,12 +201,10 @@ def send_to_slack(message):
 
 
 def main():
-    token = get_reddit_token()
     all_posts = []
     for sub in SUBREDDITS:
-        posts = fetch_subreddit(sub, token)
+        posts = fetch_subreddit(sub)
         all_posts.extend(posts)
-        print(f"Fetched {len(posts)} posts from r/{sub}")
 
     if not all_posts:
         send_to_slack("\u26a0\ufe0f *Skincare Intel*: Failed to fetch Reddit data this week.")
