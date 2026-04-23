@@ -41,7 +41,7 @@ YOUTUBE_KEYWORDS = [
 ]
 SLACK_WEBHOOK = os.environ["SLACK_WEBHOOK_URL"]
 GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
-GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
+CEREBRAS_API_KEY = os.environ["CEREBRAS_API_KEY"]
 YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
 USER_AGENT = "script:FoxtaleResearchBot:v1.0 (by /u/foxtale_research)"
 
@@ -245,8 +245,8 @@ def find_new_subreddits(all_posts):
 
 def analyze(all_posts):
     client = OpenAI(
-        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-        api_key=GEMINI_API_KEY,
+        base_url="https://api.cerebras.ai/v1",
+        api_key=CEREBRAS_API_KEY,
     )
 
     # Top 150 Reddit by score + all YouTube items
@@ -318,7 +318,7 @@ Include 3-5 problems ranked by frequency. Prioritise problems appearing in multi
     for attempt in range(3):
         try:
             response = client.chat.completions.create(
-                model="gemini-2.0-flash",
+                model="llama-3.3-70b",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
                 max_tokens=1500,
