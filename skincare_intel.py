@@ -317,9 +317,8 @@ Respond ONLY with valid JSON in this exact format:
 Include 3-5 problems ranked by frequency. Prioritise problems appearing in multiple sources. 2-3 unmet_needs. foxtale_mentions only if found (empty array if none)."""
 
     models = [
-        "deepseek/deepseek-chat:free",
-        "google/gemini-2.0-flash-exp:free",
-        "meta-llama/llama-3.3-70b-instruct:free",
+        "google/gemini-2.5-flash",
+        "openai/gpt-4o-mini",
     ]
     last_error = None
     for model in models:
