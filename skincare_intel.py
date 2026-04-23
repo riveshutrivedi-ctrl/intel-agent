@@ -318,7 +318,7 @@ Include 3-5 problems ranked by frequency. Prioritise problems appearing in multi
     for attempt in range(3):
         try:
             response = client.chat.completions.create(
-                model="llama-3.3-70b",
+                model="llama3.3-70b",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
                 max_tokens=1500,
