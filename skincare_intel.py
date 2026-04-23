@@ -41,7 +41,7 @@ YOUTUBE_KEYWORDS = [
 ]
 SLACK_WEBHOOK = os.environ["SLACK_WEBHOOK_URL"]
 GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
-GROQ_API_KEY = os.environ["GROQ_API_KEY"]
+GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
 USER_AGENT = "script:FoxtaleResearchBot:v1.0 (by /u/foxtale_research)"
 
@@ -245,8 +245,8 @@ def find_new_subreddits(all_posts):
 
 def analyze(all_posts):
     client = OpenAI(
-        base_url="https://api.groq.com/openai/v1",
-        api_key=GROQ_API_KEY,
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        api_key=GEMINI_API_KEY,
     )
 
     # Top 150 Reddit by score + all YouTube items
@@ -318,18 +318,14 @@ Include 3-5 problems ranked by frequency. Prioritise problems appearing in multi
     for attempt in range(3):
         try:
             response = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="gemini-2.0-flash",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
                 max_tokens=1500,
             )
             return json.loads(response.choices[0].message.content)
         except Exception as e:
-            if attempt < 2 and "rate_limit" in str(e).lower():
-                print(f"Rate limit hit, retrying in 70s... ({attempt + 1}/3)")
-                time.sleep(70)
-            else:
-                raise
+            raise
 
 
 def format_message(analysis, new_subreddits, total_posts):
