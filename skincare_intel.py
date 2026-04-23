@@ -326,7 +326,11 @@ Include 3-5 problems ranked by frequency. Prioritise problems appearing in multi
             )
             return json.loads(response.choices[0].message.content)
         except Exception as e:
-            raise
+            if attempt < 2 and ("429" in str(e) or "rate" in str(e).lower()):
+                print(f"Rate limited, retrying in 20s... ({attempt + 1}/3)")
+                time.sleep(20)
+            else:
+                raise
 
 
 def format_message(analysis, new_subreddits, total_posts):
