@@ -316,21 +316,32 @@ Respond ONLY with valid JSON in this exact format:
 
 Include 3-5 problems ranked by frequency. Prioritise problems appearing in multiple sources. 2-3 unmet_needs. foxtale_mentions only if found (empty array if none)."""
 
-    for attempt in range(3):
-        try:
-            response = client.chat.completions.create(
-                model="meta-llama/llama-3.3-70b-instruct:free",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                max_tokens=1500,
-            )
-            return json.loads(response.choices[0].message.content)
-        except Exception as e:
-            if attempt < 2 and ("429" in str(e) or "rate" in str(e).lower()):
-                print(f"Rate limited, retrying in 20s... ({attempt + 1}/3)")
-                time.sleep(20)
-            else:
-                raise
+    models = [
+        "deepseek/deepseek-chat:free",
+        "google/gemini-2.0-flash-exp:free",
+        "meta-llama/llama-3.3-70b-instruct:free",
+    ]
+    last_error = None
+    for model in models:
+        for attempt in range(2):
+            try:
+                print(f"Trying model: {model}")
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.3,
+                    max_tokens=1500,
+                )
+                return json.loads(response.choices[0].message.content)
+            except Exception as e:
+                last_error = e
+                if attempt == 0 and ("429" in str(e) or "rate" in str(e).lower()):
+                    print(f"Rate limited on {model}, waiting 30s...")
+                    time.sleep(30)
+                else:
+                    print(f"Model {model} failed: {e}")
+                    break
+    raise last_error
 
 
 def format_message(analysis, new_subreddits, total_posts):
